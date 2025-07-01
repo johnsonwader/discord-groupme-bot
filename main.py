@@ -10,11 +10,13 @@ import time
 # Configuration from environment variables
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GROUPME_BOT_ID = os.getenv("GROUPME_BOT_ID")
+GROUPME_ACCESS_TOKEN = os.getenv("GROUPME_ACCESS_TOKEN")  # Add this to your Railway environment variables
 DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 PORT = int(os.getenv("PORT", "8000"))
 
-# GroupMe API endpoint
+# GroupMe API endpoints
 GROUPME_POST_URL = "https://api.groupme.com/v3/bots/post"
+GROUPME_IMAGE_UPLOAD_URL = "https://image.groupme.com/pictures"
 
 # Discord bot setup
 intents = discord.Intents.default()
@@ -52,21 +54,67 @@ def run_health_server():
     # Run the server
     asyncio.new_event_loop().run_until_complete(start_server())
 
-async def send_to_groupme(message_text, author_name):
-    """Send a message to GroupMe"""
-    if not message_text.strip():
-        return
+async def upload_image_to_groupme(image_url):
+    """Download image from Discord and upload to GroupMe"""
+    if not GROUPME_ACCESS_TOKEN:
+        print("❌ GroupMe access token not available for image upload")
+        return None
     
+    async with aiohttp.ClientSession() as session:
+        try:
+            # Download image from Discord
+            async with session.get(image_url) as resp:
+                if resp.status == 200:
+                    image_data = await resp.read()
+                    print(f"📥 Downloaded image from Discord ({len(image_data)} bytes)")
+                else:
+                    print(f"❌ Failed to download image from Discord. Status: {resp.status}")
+                    return None
+            
+            # Upload to GroupMe
+            data = aiohttp.FormData()
+            data.add_field('file', image_data, filename='discord_image.png', content_type='image/png')
+            
+            async with session.post(
+                GROUPME_IMAGE_UPLOAD_URL,
+                data=data,
+                headers={'X-Access-Token': GROUPME_ACCESS_TOKEN}
+            ) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    groupme_image_url = result['payload']['url']
+                    print(f"📤 Successfully uploaded image to GroupMe: {groupme_image_url}")
+                    return groupme_image_url
+                else:
+                    print(f"❌ Failed to upload image to GroupMe. Status: {resp.status}")
+                    error_text = await resp.text()
+                    print(f"Error: {error_text}")
+                    return None
+                    
+        except Exception as e:
+            print(f"❌ Error handling image upload: {e}")
+            return None
+
+async def send_to_groupme(message_text, author_name, image_url=None):
+    """Send a message to GroupMe with optional image"""
     payload = {
         "bot_id": GROUPME_BOT_ID,
-        "text": f"{author_name}: {message_text}"
+        "text": f"{author_name}: {message_text}" if message_text.strip() else f"{author_name} sent an image"
     }
+    
+    # Add image attachment if provided
+    if image_url:
+        payload["attachments"] = [{
+            "type": "image",
+            "url": image_url
+        }]
     
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(GROUPME_POST_URL, json=payload) as response:
                 if response.status == 202:
-                    print(f"✅ Message sent to GroupMe: {message_text[:50]}...")
+                    image_info = " with image" if image_url else ""
+                    print(f"✅ Message sent to GroupMe{image_info}: {message_text[:50]}...")
                 else:
                     print(f"❌ Failed to send to GroupMe. Status: {response.status}")
                     error_text = await response.text()
@@ -80,6 +128,7 @@ async def on_ready():
     bot_status["ready"] = True
     print(f'🤖 {bot.user} has connected to Discord!')
     print(f'📺 Monitoring channel ID: {DISCORD_CHANNEL_ID}')
+    print(f'🖼️ Image support: {"✅" if GROUPME_ACCESS_TOKEN else "❌ (GROUPME_ACCESS_TOKEN not set)"}')
     print(f'🚀 Bot is ready and running on Railway!')
 
 @bot.event
@@ -90,8 +139,30 @@ async def on_message(message):
     
     # Only forward messages from the specified channel
     if message.channel.id == DISCORD_CHANNEL_ID:
-        print(f"📨 Forwarding message from {message.author.display_name}: {message.content[:50]}...")
-        await send_to_groupme(message.content, message.author.display_name)
+        print(f"📨 Processing message from {message.author.display_name}...")
+        
+        # Handle images
+        if message.attachments:
+            for attachment in message.attachments:
+                if attachment.content_type and attachment.content_type.startswith('image/'):
+                    print(f"🖼️ Found image attachment: {attachment.filename}")
+                    
+                    # Upload image to GroupMe
+                    groupme_image_url = await upload_image_to_groupme(attachment.url)
+                    
+                    if groupme_image_url:
+                        # Send message with image
+                        await send_to_groupme(message.content, message.author.display_name, groupme_image_url)
+                    else:
+                        # Send text message indicating image upload failed
+                        await send_to_groupme(f"{message.content} [Image upload failed]", message.author.display_name)
+                else:
+                    # Non-image attachment
+                    await send_to_groupme(f"{message.content} [Attached: {attachment.filename}]", message.author.display_name)
+        else:
+            # Regular text message
+            if message.content.strip():  # Only send if there's actual content
+                await send_to_groupme(message.content, message.author.display_name)
     
     # Process commands
     await bot.process_commands(message)
@@ -109,7 +180,8 @@ async def test_bridge(ctx):
 async def status(ctx):
     """Check bot status"""
     if ctx.channel.id == DISCORD_CHANNEL_ID:
-        await ctx.send(f"🟢 Bot is online and monitoring this channel!\n🔗 Connected to GroupMe: {'✅' if GROUPME_BOT_ID else '❌'}")
+        image_status = "✅" if GROUPME_ACCESS_TOKEN else "❌"
+        await ctx.send(f"🟢 Bot is online and monitoring this channel!\n🔗 Connected to GroupMe: {'✅' if GROUPME_BOT_ID else '❌'}\n🖼️ Image support: {image_status}")
 
 if __name__ == "__main__":
     # Validate environment variables
@@ -124,6 +196,9 @@ if __name__ == "__main__":
     if DISCORD_CHANNEL_ID == 0:
         print("❌ DISCORD_CHANNEL_ID environment variable not set!")
         exit(1)
+    
+    if not GROUPME_ACCESS_TOKEN:
+        print("⚠️ GROUPME_ACCESS_TOKEN not set - image uploads will be disabled")
     
     # Start health check server in a separate thread
     print("🏥 Starting health check server...")
