@@ -1,0 +1,2 @@
+# Procfile (if needed)
+web: python main.py
