@@ -1,3 +1,9 @@
 # railway.toml
 [build]
 builder = "NIXPACKS"
+
+[deploy]
+healthcheckPath = "/"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
