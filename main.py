@@ -4,6 +4,8 @@ import asyncio
 import os
 from discord.ext import commands
 from aiohttp import web
+import threading
+import time
 
 # Configuration from environment variables
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -19,26 +21,36 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Health check server for Railway
-async def health_check(request):
-    """Health check endpoint for Railway"""
-    return web.json_response({
-        "status": "healthy",
-        "bot_ready": bot.is_ready(),
-        "timestamp": asyncio.get_event_loop().time()
-    })
+# Global variable to track bot status
+bot_status = {"ready": False, "start_time": time.time()}
 
-async def start_health_server():
-    """Start the health check server"""
-    app = web.Application()
-    app.router.add_get('/', health_check)
-    app.router.add_get('/health', health_check)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
-    print(f"🏥 Health check server started on port {PORT}")
+# Simple health check that runs in a separate thread
+def run_health_server():
+    """Run health check server in a separate thread"""
+    async def health_check(request):
+        return web.json_response({
+            "status": "healthy",
+            "bot_ready": bot_status["ready"],
+            "uptime": time.time() - bot_status["start_time"]
+        })
+
+    async def start_server():
+        app = web.Application()
+        app.router.add_get('/', health_check)
+        app.router.add_get('/health', health_check)
+        
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
+        await site.start()
+        print(f"🏥 Health check server running on port {PORT}")
+        
+        # Keep the server running
+        while True:
+            await asyncio.sleep(60)
+
+    # Run the server
+    asyncio.new_event_loop().run_until_complete(start_server())
 
 async def send_to_groupme(message_text, author_name):
     """Send a message to GroupMe"""
@@ -64,12 +76,11 @@ async def send_to_groupme(message_text, author_name):
 
 @bot.event
 async def on_ready():
+    global bot_status
+    bot_status["ready"] = True
     print(f'🤖 {bot.user} has connected to Discord!')
     print(f'📺 Monitoring channel ID: {DISCORD_CHANNEL_ID}')
     print(f'🚀 Bot is ready and running on Railway!')
-    
-    # Start health check server
-    await start_health_server()
 
 @bot.event
 async def on_message(message):
@@ -114,7 +125,16 @@ if __name__ == "__main__":
         print("❌ DISCORD_CHANNEL_ID environment variable not set!")
         exit(1)
     
-    print("🚀 Starting Discord to GroupMe bridge on Railway...")
+    # Start health check server in a separate thread
+    print("🏥 Starting health check server...")
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    
+    # Give the health server a moment to start
+    time.sleep(2)
+    
+    # Start Discord bot
+    print("🚀 Starting Discord to GroupMe bridge...")
     try:
         bot.run(DISCORD_BOT_TOKEN)
     except Exception as e:
