@@ -1,14 +1,17 @@
-# main.py - Updated for Railway deployment
+# main.py - Updated for Railway deployment with health check
 import discord
 import aiohttp
 import asyncio
 import os
 from discord.ext import commands
+from aiohttp import web
+import threading
 
 # Configuration from environment variables
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GROUPME_BOT_ID = os.getenv("GROUPME_BOT_ID")
 DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
+PORT = int(os.getenv("PORT", "8000"))
 
 # GroupMe API endpoint
 GROUPME_POST_URL = "https://api.groupme.com/v3/bots/post"
@@ -17,6 +20,27 @@ GROUPME_POST_URL = "https://api.groupme.com/v3/bots/post"
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
+
+# Health check server for Railway
+async def health_check(request):
+    """Health check endpoint for Railway"""
+    return web.json_response({
+        "status": "healthy",
+        "bot_ready": bot.is_ready(),
+        "timestamp": asyncio.get_event_loop().time()
+    })
+
+async def start_health_server():
+    """Start the health check server"""
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    print(f"🏥 Health check server started on port {PORT}")
 
 async def send_to_groupme(message_text, author_name):
     """Send a message to GroupMe"""
@@ -45,6 +69,9 @@ async def on_ready():
     print(f'🤖 {bot.user} has connected to Discord!')
     print(f'📺 Monitoring channel ID: {DISCORD_CHANNEL_ID}')
     print(f'🚀 Bot is ready and running on Railway!')
+    
+    # Start health check server
+    await start_health_server()
 
 @bot.event
 async def on_message(message):
@@ -94,3 +121,20 @@ if __name__ == "__main__":
         bot.run(DISCORD_BOT_TOKEN)
     except Exception as e:
         print(f"❌ Failed to start bot: {e}")
+
+# requirements.txt
+discord.py==2.3.2
+aiohttp==3.9.1
+
+# railway.toml
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# Procfile (if needed)
+web: python main.py
