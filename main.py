@@ -1,11 +1,9 @@
-# main.py - Updated for Railway deployment with health check
 import discord
 import aiohttp
 import asyncio
 import os
 from discord.ext import commands
 from aiohttp import web
-import threading
 
 # Configuration from environment variables
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -121,20 +119,3 @@ if __name__ == "__main__":
         bot.run(DISCORD_BOT_TOKEN)
     except Exception as e:
         print(f"❌ Failed to start bot: {e}")
-
-# requirements.txt
-discord.py==2.3.2
-aiohttp==3.9.1
-
-# railway.toml
-[build]
-builder = "NIXPACKS"
-
-[deploy]
-healthcheckPath = "/health"
-healthcheckTimeout = 300
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 10
-
-# Procfile (if needed)
-web: python main.py
